@@ -8,7 +8,8 @@
 		"start": "next start",
 		"lint": "next lint",
 		"db:seed": "tsx prisma/seed.ts",
-		"postinstall": "prisma generate"
+		"postinstall": "prisma generate",
+		"db:reset": "pnpx prisma migrate reset"
 	},
 	"dependencies": {
 		"@cloudinary/react": "^1.14.3",
