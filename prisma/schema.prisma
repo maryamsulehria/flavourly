@@ -1,0 +1,353 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========= ENUMERATIONS =========
+// These correspond to the custom PostgreSQL ENUM types.
+
+enum RoleName {
+  RecipeDeveloper
+  Nutritionist
+}
+
+enum VerificationStatus {
+  pending_verification
+  verified
+  needs_revision
+}
+
+enum MediaType {
+  image
+  video
+}
+
+enum NutritionDataSource {
+  estimated_api
+  verified_nutritionist
+}
+
+enum MealType {
+  Breakfast
+  Lunch
+  Dinner
+  Snack
+}
+
+// ========= CORE MODELS =========
+
+model Role {
+  id    Int      @id @default(autoincrement())
+  name  RoleName @unique
+  users User[]
+}
+
+model User {
+  id                  Int      @id @default(autoincrement())
+  username            String   @unique
+  email               String   @unique
+  passwordHash        String
+  fullName            String?
+  bio                 String?
+  profilePicture      String?
+  dietaryRestrictions String[] @default([])
+  allergies           String[] @default([])
+  cuisinePreferences  String[] @default([])
+  cookingSkill        String?
+  spiceTolerance      String?
+  mealSize            String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Relations
+  roleId Int
+  role   Role @relation(fields: [roleId], references: [id])
+
+  createdRecipes  Recipe[]         @relation("RecipeAuthor") // Recipes created by this user
+  verifiedRecipes Recipe[]         @relation("NutritionistVerifier") // Recipes verified by this user (as Nutritionist)
+  reviews         Review[]
+  favoriteRecipes FavoriteRecipe[]
+  collections     Collection[]
+  mealPlans       MealPlan[]
+  shoppingLists   ShoppingList[]
+}
+
+model Recipe {
+  id                 Int     @id @default(autoincrement())
+  title              String
+  description        String?
+  cookingTimeMinutes Int? /// @db.Check(constraint: "cooking_time_minutes > 0")
+  servings           Int? /// @db.Check(constraint: "servings > 0")
+
+  // Verification Workflow
+  status     VerificationStatus @default(pending_verification)
+  verifiedAt DateTime?
+  healthTips String? // Tips from the nutritionist
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  authorId Int
+  author   User @relation("RecipeAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  verifiedById Int?
+  verifiedBy   User? @relation("NutritionistVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+
+  ingredients     RecipeIngredient[]
+  steps           PreparationStep[]
+  media           Media[]
+  tags            RecipeTag[]
+  reviews         Review[]
+  favoritedBy     FavoriteRecipe[]
+  collections     CollectionRecipe[]
+  nutritionalInfo NutritionalInformation?
+  mealPlanEntries MealPlanEntry[]
+
+  @@index([authorId])
+  @@index([status])
+}
+
+// ========= RECIPE COMPONENTS (Explicit Many-to-Many) =========
+
+model Ingredient {
+  id      Int                @id @default(autoincrement())
+  name    String             @unique
+  recipes RecipeIngredient[]
+}
+
+model MeasurementUnit {
+  id           Int                @id @default(autoincrement())
+  unitName     String             @unique
+  abbreviation String?            @unique
+  ingredients  RecipeIngredient[]
+}
+
+// Explicit many-to-many join table for Recipes and Ingredients
+model RecipeIngredient {
+  quantity Decimal
+  notes    String?
+
+  // Relations
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  ingredientId Int
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  unitId Int
+  unit   MeasurementUnit @relation(fields: [unitId], references: [id])
+
+  @@id([recipeId, ingredientId])
+  @@index([ingredientId])
+}
+
+model PreparationStep {
+  id          Int    @id @default(autoincrement())
+  stepNumber  Int
+  instruction String
+
+  // Relation
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@unique([recipeId, stepNumber])
+}
+
+model Media {
+  id        Int       @id @default(autoincrement())
+  mediaType MediaType
+  url       String    @db.VarChar(2048)
+  caption   String?
+
+  // Relation
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+}
+
+// ========= CATEGORIZATION & TAGGING =========
+
+model TagType {
+  id       Int    @id @default(autoincrement())
+  typeName String @unique
+  tags     Tag[]
+}
+
+model Tag {
+  id      Int    @id @default(autoincrement())
+  tagName String
+
+  // Relations
+  tagTypeId Int
+  tagType   TagType     @relation(fields: [tagTypeId], references: [id], onDelete: Cascade)
+  recipes   RecipeTag[]
+
+  @@unique([tagTypeId, tagName])
+}
+
+// Explicit many-to-many join table for Recipes and Tags
+model RecipeTag {
+  // Relations
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  tagId Int
+  tag   Tag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([recipeId, tagId])
+  @@index([tagId])
+}
+
+// ========= USER ENGAGEMENT =========
+
+model Review {
+  id        Int      @id @default(autoincrement())
+  rating    Int /// @db.Check(constraint: "rating >= 1 AND rating <= 5")
+  comment   String?
+  createdAt DateTime @default(now())
+
+  // Relations
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([recipeId, userId]) // User can only review a recipe once
+  @@index([userId])
+}
+
+// Explicit many-to-many join table for Favorite Recipes
+model FavoriteRecipe {
+  createdAt DateTime @default(now())
+
+  // Relations
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@id([userId, recipeId])
+}
+
+model Collection {
+  id             Int      @id @default(autoincrement())
+  collectionName String
+  description    String?
+  createdAt      DateTime @default(now())
+
+  // Relations
+  userId  Int
+  user    User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recipes CollectionRecipe[]
+}
+
+// Explicit many-to-many join table for Collections and Recipes
+model CollectionRecipe {
+  // Relations
+  collectionId Int
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@id([collectionId, recipeId])
+}
+
+// ========= NUTRITIONAL INFORMATION (One-to-One) =========
+
+model NutritionalInformation {
+  calories           Decimal?
+  proteinGrams       Decimal?
+  carbohydratesGrams Decimal?
+  fatGrams           Decimal?
+  fiberGrams         Decimal?
+  sugarGrams         Decimal?
+  sodiumMg           Decimal?
+  dataSource         NutritionDataSource @default(estimated_api)
+
+  // Relation (One-to-One)
+  recipeId Int    @id // Using the foreign key as the primary key enforces a 1-to-1 relationship
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+}
+
+// ========= MEAL PLANNING =========
+
+model MealPlan {
+  id        Int      @id @default(autoincrement())
+  planName  String
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  createdAt DateTime @default(now())
+
+  // Relation
+  userId        Int
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entries       MealPlanEntry[]
+  shoppingLists ShoppingList[]
+
+  /// @db.Check(constraint: "end_date >= start_date")
+}
+
+model MealPlanEntry {
+  id                Int      @id @default(autoincrement())
+  mealDate          DateTime @db.Date
+  mealType          MealType
+  servingsToPrepare Int      @default(1) /// @db.Check(constraint: "servings_to_prepare > 0")
+
+  // Relations
+  planId Int
+  plan   MealPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  recipeId Int
+  recipe   Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@index([recipeId])
+}
+
+// ========= SHOPPING LIST =========
+
+model ShoppingList {
+  id        Int      @id @default(autoincrement())
+  listName  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  mealPlanId Int?
+  mealPlan   MealPlan? @relation(fields: [mealPlanId], references: [id], onDelete: SetNull)
+
+  items ShoppingListItem[]
+
+  @@index([userId])
+  @@index([mealPlanId])
+}
+
+model ShoppingListItem {
+  id          Int      @id @default(autoincrement())
+  itemName    String
+  quantity    Decimal
+  unit        String?
+  notes       String?
+  isCompleted Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  // Relations
+  listId Int
+  list   ShoppingList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@index([listId])
+  @@index([sortOrder])
+}
